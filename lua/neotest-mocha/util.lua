@@ -219,10 +219,10 @@ end
 ---@param strategy string
 ---@param command string[]
 ---@return table|nil
-function M.get_strategy_config(strategy, command)
+function M.get_strategy_config(strategy, command, dap_args)
   local config = {
     dap = function()
-      return {
+      return vim.tbl_extend("keep", {
         name = "Debug Mocha Tests",
         type = "pwa-node",
         request = "launch",
@@ -230,7 +230,7 @@ function M.get_strategy_config(strategy, command)
         runtimeExecutable = command[1],
         console = "integratedTerminal",
         internalConsoleOptions = "neverOpen",
-      }
+      }, dap_args)
     end,
   }
 

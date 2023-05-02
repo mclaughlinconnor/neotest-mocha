@@ -167,7 +167,7 @@ function Adapter.build_spec(args)
       results_path = results_path,
       file = pos.path,
     },
-    strategy = util.get_strategy_config(args.strategy, command),
+    strategy = util.get_strategy_config(args.strategy, command, dap_args),
     env = get_env(args[2] and args[2].env or {}),
   }
 end
@@ -243,6 +243,9 @@ setmetatable(Adapter, {
       get_cwd = function()
         return opts.cwd
       end
+    end
+    if type(opts.dap) == "table" then
+      dap_args = opts.dap
     end
     return Adapter
   end,
