@@ -203,16 +203,16 @@ end
 function M.escape_test_pattern(s)
   return (
     s:gsub("%(", "%\\(")
-      :gsub("%)", "%\\)")
-      :gsub("%]", "%\\]")
-      :gsub("%[", "%\\[")
-      :gsub("%*", "%\\*")
-      :gsub("%+", "%\\+")
-      :gsub("%-", "%\\-")
-      :gsub("%?", "%\\?")
-      :gsub("%$", "%\\$")
-      :gsub("%^", "%\\^")
-      :gsub("%/", "%\\/")
+    :gsub("%)", "%\\)")
+    :gsub("%]", "%\\]")
+    :gsub("%[", "%\\[")
+    :gsub("%*", "%\\*")
+    :gsub("%+", "%\\+")
+    :gsub("%-", "%\\-")
+    :gsub("%?", "%\\?")
+    :gsub("%$", "%\\$")
+    :gsub("%^", "%\\^")
+    :gsub("%/", "%\\/")
   )
 end
 
@@ -257,10 +257,10 @@ end
 ---@return string
 function M.clean_ansi(s)
   return s:gsub("\x1b%[%d+;%d+;%d+;%d+;%d+m", "")
-    :gsub("\x1b%[%d+;%d+;%d+;%d+m", "")
-    :gsub("\x1b%[%d+;%d+;%d+m", "")
-    :gsub("\x1b%[%d+;%d+m", "")
-    :gsub("\x1b%[%d+m", "")
+      :gsub("\x1b%[%d+;%d+;%d+;%d+m", "")
+      :gsub("\x1b%[%d+;%d+;%d+m", "")
+      :gsub("\x1b%[%d+;%d+m", "")
+      :gsub("\x1b%[%d+m", "")
 end
 
 ---@param file string
@@ -282,6 +282,8 @@ function M.parsed_json_to_results(data, tree, consoleOut)
   local tests = {}
 
   for _, test in pairs(data.tests) do
+    test.file = test.file:gsub(".src/", ""):gsub(".js$", ".ts") -- tests are actually run on the compiled js
+
     local testKey = test.file .. " " .. test.fullTitle
     local name = test.title
     local status
@@ -292,9 +294,15 @@ function M.parsed_json_to_results(data, tree, consoleOut)
     -- of a test. We need to find the test node in the tree by replacing the tokens
     -- with spaces and matching with the full title.
     for _, node in tree:iter() do
-      local nodeKey = node.id:gsub("::", " ")
+      -- Format the test name as a regex so that we I can do proper matching
+      -- "Test ${attribute} equals ${status}" will be written as
+      -- "Test .* equals .*" and then regex matched against the result from Mocha.
+      local nodeKey
+      local testIdComponents = vim.split(node.id, "::")
+      table.insert(testIdComponents, M.getStringFromString(M.removeQuotes(table.remove(testIdComponents))))
+      nodeKey = table.concat(testIdComponents, " ")
 
-      if testKey == nodeKey then
+      if testKey:match(nodeKey) then
         testNode = node
         break
       end
@@ -362,6 +370,54 @@ function M.create_test_file_extensions_matcher(intermediate_extensions, end_exte
 
     return false
   end
+end
+
+---@param s string
+---@param quoteType string
+---@return boolean
+function M.isStringType(s, quoteType)
+  return string.sub(s, 1, 1) == quoteType
+end
+
+---@param s string
+---@return string
+function M.getQuoteType(s)
+  local quoteType = "'"
+  if M.isStringType(s, [["]]) then
+    quoteType = '"'
+  elseif M.isStringType(s, [[`]]) then
+    quoteType = "`"
+  end
+
+  return quoteType
+end
+
+---@param s string
+---@return string
+function M.removeQuotes(s)
+  local quoteType = M.getQuoteType(s)
+  local matched = string.match(s, "^" .. quoteType .. "(.*)" .. quoteType .. "$")
+  if not matched then
+    return s
+  end
+
+  return (matched:gsub("\\" .. quoteType, quoteType)) -- unescape \', \", \`
+end
+
+---@param s string
+---@return string
+function M.getStringFromString(s)
+  return (
+    s
+    :gsub("%${.*}", ".*")   -- template literal ${var}
+    :gsub("%%s", "\\w*")    -- test each %s string param
+    :gsub("%%i", "\\d*")    -- test each %i integer param
+    :gsub("%%d", ".*")      -- test each %d number param
+    :gsub("%%f", ".*")      -- test each %f float param
+    :gsub("%%j", ".*")      -- test each %j json param
+    :gsub("%%o", ".*")      -- test each %o object param
+    :gsub("%%#", "\\d*")    -- test each %# index param
+  )
 end
 
 return M

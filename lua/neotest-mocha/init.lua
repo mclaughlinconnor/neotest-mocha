@@ -55,32 +55,6 @@ function Adapter.filter_dir(name)
   return name ~= "node_modules"
 end
 
----@param s string
----@param boolean
-local function isTemplateLiteral(s)
-  return string.sub(s, 1, 1) == "`"
-end
-
----@param s string
----@param string
-local function getStringFromTemplateLiteral(s)
-  local matched = string.match(s, "^`(.*)`$")
-  if not matched then
-    return s
-  end
-  return (
-    matched
-      :gsub("%${.*}", ".*") -- template literal ${var}
-      :gsub("%%s", "\\w*") -- test each %s string param
-      :gsub("%%i", "\\d*") -- test each %i integer param
-      :gsub("%%d", ".*") -- test each %d number param
-      :gsub("%%f", ".*") -- test each %f float param
-      :gsub("%%j", ".*") -- test each %j json param
-      :gsub("%%o", ".*") -- test each %o object param
-      :gsub("%%#", "\\d*") -- test each %# index param
-  )
-end
-
 ---Given a file path, parse all the tests within it.
 ---@async
 ---@param file_path string Absolute file path
@@ -105,14 +79,16 @@ function Adapter.discover_positions(file_path)
     ; Matches: `it('test') / specify('test')`
     ((call_expression
       function: (identifier) @func_name (#any-of? @func_name "it" "specify")
-      arguments: (arguments [(template_string) @test.name (string (string_fragment) @test.name)]  [(arrow_function) (function)])
+      ; matches whole string including quotes
+      arguments: (arguments [(template_string) @test.name (string) @test.name]  [(arrow_function) (function)])
     )) @test.definition
     ; Matches: `it.only('test') / specify.only('test')`
     ((call_expression
       function: (member_expression
         object: (identifier) @func_name (#any-of? @func_name "it" "specify")
       )
-      arguments: (arguments [(template_string) @test.name (string (string_fragment) @test.name)]  [(arrow_function) (function)])
+      ; matches whole string including quotes
+      arguments: (arguments [(template_string) @test.name (string) @test.name]  [(arrow_function) (function)])
     )) @test.definition
   ]]
 
@@ -121,32 +97,12 @@ function Adapter.discover_positions(file_path)
   for _, node in parsedTree:iter_nodes() do
     if #node:children() > 0 then
       for _, pos in node:iter_nodes() do
-        if pos.type == "test" then
-          local test = pos:data()
-          if isTemplateLiteral(test.name) then
-            local testNode = parsedTree:get_key(test.id)
-            local originalId = test.id
-            if not testNode then
-              return
-            end
-            local parent = testNode:parent()
-            if not parent then
-              return
-            end
-
-            test.name = getStringFromTemplateLiteral(test.name)
-            test.id = test.path .. "::" .. test.name
-
-            --[[ vim.pretty_print(parent) ]]
-            --[[ vim.pretty_print(parent._children) ]]
-            --[[ vim.pretty_print(parent._children[1]) ]]
-            for i, child in pairs(parent._children) do
-              if originalId == child:data().id then
-                parent._children[i]:data().id = test.id
-              end
-            end
-            testNode._parent = parent
-          end
+        local test = pos:data()
+        if test.type == "test" then
+          -- Format the name nicely by removing the ugly quotes
+          -- Keep test.id the same so it can be used to create the Mocha command
+          local quotelessName = util.removeQuotes(test.name)
+          test.name = quotelessName
         end
       end
     end
@@ -156,7 +112,7 @@ function Adapter.discover_positions(file_path)
 end
 
 ---@param args neotest.RunArgs
----@return neotest.RunSpec
+---@return neotest.RunSpec | nil
 function Adapter.build_spec(args)
   local results_path = async.fn.tempname() .. ".json"
   local tree = args.tree
@@ -168,12 +124,31 @@ function Adapter.build_spec(args)
   local pos = tree:data()
   local testNamePattern = "'.*'"
 
+  -- You can't use filenames in --grep filters
+  if pos.type == "file" then
+    return
+  end
+
+  -- You can't use directories in --grep filters
+  if pos.type == "dir" then
+    return
+  end
+
+  local testIdComponents = {}
+
+  testIdComponents = vim.split(pos.id, "::")
+  table.remove(testIdComponents, 1) -- remove the filename
+
   if pos.type == "test" then
-    testNamePattern = "'" .. util.escape_test_pattern(pos.name) .. "$'"
+    -- Format test.name as a regex
+    local testName = util.getStringFromString(util.removeQuotes(table.remove(testIdComponents)))
+    table.insert(testIdComponents, testName)
+
+    testNamePattern = "'" .. table.concat(testIdComponents, " ") .. "$'"
   end
 
   if pos.type == "namespace" then
-    testNamePattern = "'^" .. util.escape_test_pattern(pos.name) .. "'"
+    testNamePattern = "'" .. table.concat(testIdComponents, " ") .. "'"
   end
 
   local binary = get_mocha_command(pos.path)
@@ -182,9 +157,7 @@ function Adapter.build_spec(args)
   vim.list_extend(command, {
     "--full-trace",
     "--reporter=json",
-    "--reporter-options=output=" .. results_path,
     "--grep=" .. testNamePattern,
-    pos.path,
   })
 
   return {
@@ -205,13 +178,29 @@ end
 ---@param tree neotest.Tree
 ---@return table<string, neotest.Result>
 function Adapter.results(spec, result, tree)
-  local output_file = spec.context.results_path
+  local output_file = result.output
   local success, data = pcall(lib.files.read, output_file)
 
   if not success then
-    logger.error("No test output file found ", output_file)
+    logger.error("No test output file found for reading ", output_file)
     return {}
   end
+
+  -- Stack traces can't be parsed as JSON, so guess where it is, then remove it
+  local isLikelyJson = false
+  local lines = {}
+
+  for line in data:gmatch "[^\r\n]+" do
+    if line:match "^%s*{" ~= nil then
+      isLikelyJson = true
+    end
+
+    if isLikelyJson == true then
+      table.insert(lines, line)
+    end
+  end
+
+  data = table.concat(lines)
 
   local ok, parsed = pcall(vim.json.decode, data, { luanil = { object = true } })
 
