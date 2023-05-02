@@ -198,6 +198,22 @@ function M.get_mocha_command(path)
   return "mocha"
 end
 
+-- Hacky workaround to remove lua special characters from strings
+---@param s string
+---@return string
+function M.escape_lua_pattern(s)
+  return (
+    s
+    :gsub("%-", "%.")
+    :gsub("%^", "%.")
+    :gsub("%+", "%.")
+    :gsub("%*", "%.")
+    :gsub("%?", "%.")
+    :gsub("%%", "%.")
+    :gsub("%$", "%.")
+  )
+end
+
 ---@param s string
 ---@return string
 function M.escape_test_pattern(s)
@@ -302,7 +318,7 @@ function M.parsed_json_to_results(data, tree, consoleOut)
       table.insert(testIdComponents, M.getStringFromString(M.removeQuotes(table.remove(testIdComponents))))
       nodeKey = table.concat(testIdComponents, " ")
 
-      if testKey:match(nodeKey) then
+      if testKey:match(M.escape_lua_pattern(nodeKey)) then
         testNode = node
         break
       end
